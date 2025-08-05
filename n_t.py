@@ -38,8 +38,8 @@ def calculate_rsi(df, period=14):
 
 def detect_price_action(df):
     patterns = []
-    if len(df) < 3:  # ✅ Prevent error on small data
-        return patterns
+    if len(df) < 3:
+        return patterns  # ✅ prevent error if not enough candles
     for i in range(2, len(df)):
         o1, c1 = df['Open'].iloc[i - 2], df['Close'].iloc[i - 2]
         o2, c2 = df['Open'].iloc[i - 1], df['Close'].iloc[i - 1]
@@ -48,9 +48,10 @@ def detect_price_action(df):
         elif c1 > o1 and c2 < o2 and c2 < o1 and o2 > c1:
             patterns.append((df.index[i], 'Bearish Engulfing'))
     return patterns
-    
 
 def detect_elliott_wave_breakout(df):
+    if len(df) < 20:
+        return False, None
     breakout = df['Close'].iloc[-1] > df['Close'].rolling(window=20).max().iloc[-2]
     return breakout, None
 
@@ -91,8 +92,8 @@ tp_buffer = st.slider("TP Buffer (%)", 0.5, 10.0, 2.0)
 interval_map = {"1h": "60m", "15m": "15m", "5m": "5m"}
 df = yf.download(symbols[asset], period="5d", interval=interval_map[timeframe])
 
-if df.empty:
-    st.warning("No data found for the selected asset/timeframe.")
+if df.empty or len(df) < 3:
+    st.warning("Not enough data found for the selected asset/timeframe.")
     st.stop()
 
 # --- Apply Strategy ---
@@ -121,4 +122,3 @@ st.write(f"EMA10: {df['EMA10'].iloc[-1]:.2f}, EMA20: {df['EMA20'].iloc[-1]:.2f}"
 # --- Accuracy ---
 accuracy = backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True)
 st.write(f"Backtested Accuracy: {accuracy}%")
-
