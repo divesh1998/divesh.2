@@ -29,39 +29,31 @@ def get_data(symbol, interval, period='7d'):
     df.dropna(inplace=True)
     return df
 
-# --- Trend Detection using EMA20/50 ---
+# --- Trend Detection ---
 def detect_trend(df):
     df['EMA20'] = df['Close'].ewm(span=20).mean()
     df['EMA50'] = df['Close'].ewm(span=50).mean()
-    if df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1]:
+    ema_diff = df['EMA20'] - df['EMA50']
+    if ema_diff.iloc[-1] > 0 and ema_diff.iloc[-2] > 0 and ema_diff.iloc[-3] > 0:
         return "Uptrend"
-    else:
+    elif ema_diff.iloc[-1] < 0 and ema_diff.iloc[-2] < 0 and ema_diff.iloc[-3] < 0:
         return "Downtrend"
+    else:
+        return "Sideways"
 
-# --- RSI + EMA Scalping Signal ---
+# --- Scalping Signal with EMA10/20 ---
 def generate_scalping_signals(df):
     df['EMA10'] = df['Close'].ewm(span=10).mean()
     df['EMA20'] = df['Close'].ewm(span=20).mean()
-    df['EMA50'] = df['Close'].ewm(span=50).mean()
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
     df['Signal'] = 0
-
     for i in range(1, len(df)):
-        trend = "Uptrend" if df['EMA20'].iloc[i] > df['EMA50'].iloc[i] else "Downtrend"
-        rsi = df['RSI'].iloc[i]
-        if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1] and trend == "Uptrend" and rsi < 70:
+        if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1]:
             df.at[df.index[i], 'Signal'] = 1
-        elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1] and trend == "Downtrend" and rsi > 30:
+        elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1]:
             df.at[df.index[i], 'Signal'] = -1
     return df
 
-# --- SL/TP Calculation ---
+# --- SL/TP ---
 def generate_sl_tp(price, signal, trend):
     atr = 0.015 if trend == "Uptrend" else 0.02
     rr = 2.0
@@ -75,9 +67,9 @@ def generate_sl_tp(price, signal, trend):
         sl = tp = price
     return round(sl, 2), round(tp, 2)
 
-# --- Scalping Strategy Accuracy ---
+# --- Accuracy ---
 def backtest_scalping_accuracy(df):
-    df = generate_scalping_signals(df.copy())
+    df = generate_scalping_signals(df)
     df['Return'] = df['Close'].pct_change().shift(-1)
     df['StrategyReturn'] = df['Signal'].shift(1) * df['Return']
     total_signals = df[df['Signal'] != 0]
@@ -85,50 +77,7 @@ def backtest_scalping_accuracy(df):
     accuracy = round(len(correct) / len(total_signals) * 100, 2) if len(total_signals) else 0
     return accuracy
 
-# --- Elliott Wave Detection ---
-def detect_elliott_wave_breakout(df):
-    if len(df) < 6:
-        return False, ""
-    wave1_start = df['Low'].iloc[-6]
-    wave1_end = df['High'].iloc[-5]
-    wave2 = df['Low'].iloc[-4]
-    current_price = df['Close'].iloc[-1]
-    trend = detect_trend(df)
-    if trend == "Uptrend" and current_price > wave1_end:
-        return True, "🌀 Elliott Wave 3 Uptrend Breakout Detected!"
-    elif trend == "Downtrend" and current_price < wave2:
-        return True, "🌀 Elliott Wave 3 Downtrend Breakout Detected!"
-    return False, ""
-
-# --- Price Action Detection ---
-def detect_price_action(df):
-    patterns = []
-    for i in range(2, len(df)):
-        o1, c1, h1, l1 = df.iloc[i-1][["Open", "Close", "High", "Low"]]
-        o2, c2, h2, l2 = df.iloc[i][["Open", "Close", "High", "Low"]]
-        if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
-            patterns.append((df.index[i], "Bullish Engulfing"))
-        elif c1 > o1 and c2 < o2 and c2 < o1 and o2 > c1:
-            patterns.append((df.index[i], "Bearish Engulfing"))
-        elif h2 < h1 and l2 > l1:
-            patterns.append((df.index[i], "Inside Bar"))
-        body = abs(c2 - o2)
-        wick = h2 - l2
-        if body < wick * 0.3:
-            patterns.append((df.index[i], "Pin Bar"))
-        if c1 < o1 and abs(c2 - o2) < 0.2 * (h2 - l2):
-            if i+1 < len(df):
-                o3, c3 = df.iloc[i+1][["Open", "Close"]]
-                if c3 > o3:
-                    patterns.append((df.index[i+1], "Morning Star"))
-        if c1 > o1 and abs(c2 - o2) < 0.2 * (h2 - l2):
-            if i+1 < len(df):
-                o3, c3 = df.iloc[i+1][["Open", "Close"]]
-                if c3 < o3:
-                    patterns.append((df.index[i+1], "Evening Star"))
-    return patterns
-
-# --- Upload Chart & Reason ---
+# --- Upload Chart ---
 uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"])
 trade_reason = st.text_area("📜 Enter Trade Reason")
 if st.button("💾 Save Chart & Reason"):
@@ -156,12 +105,14 @@ for file in os.listdir("saved_charts"):
 for tf_label, tf_code in timeframes.items():
     st.markdown("---")
     st.subheader(f"🕒 Timeframe: {tf_label}")
-    
+
     df = get_data(symbol_yf, tf_code)
     trend = detect_trend(df)
     df = generate_scalping_signals(df)
 
-    if not df[df["Signal"] != 0].empty:
+    if tf_label in ["15M", "5M"] and trend == "Sideways":
+        signal = 0
+    elif not df[df["Signal"] != 0].empty:
         signal_index = df[df["Signal"] != 0].index[-1]
         signal = df.loc[signal_index, "Signal"]
         price = round(df.loc[signal_index, "Close"], 2)
@@ -174,23 +125,22 @@ for tf_label, tf_code in timeframes.items():
     reward = abs(tp - price)
     risk = abs(price - sl)
     rr_ratio = round(reward / risk, 2) if risk != 0 else "∞"
-    signal_text = "Buy" if signal == 1 else "Sell" if signal == -1 else "No Signal"
+    signal_text = "🟢 Buy" if signal == 1 else "🔴 Sell" if signal == -1 else "⚪ No Signal"
+    accuracy = backtest_scalping_accuracy(df)
 
     st.write(f"**Trend:** `{trend}`")
     st.write(f"**Signal:** `{signal_text}`")
+    st.metric("🎯 Scalping Strategy Accuracy", f"{accuracy}%")
     st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
     st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
 
-    accuracy = backtest_scalping_accuracy(df)
-    st.metric("🎯 Scalping Strategy Accuracy", f"{accuracy}%")
-
+    # --- Scalping Badge ---
     if tf_label in ["15M", "5M"]:
-        st.info("⚡ Scalping Signal Active (RSI + EMA10/20 + Trend Confirmed)")
+        if trend == "Sideways":
+            scalping_label = '<span style="color:orange; font-weight:bold;">⚠️ Scalping Zone (Sideways Market)</span>'
+        else:
+            scalping_label = '<span style="color:green; font-weight:bold;">✅ Trend Zone (Scalping Allowed)</span>'
+    else:
+        scalping_label = '<span style="color:gray;">🔍 Higher Timeframe (Scalping Not Applicable)</span>'
 
-    # Elliott Wave Message
-    breakout, message = detect_elliott_wave_breakout(df)
-    if breakout:
-        st.warning(message)
-
-    # Price Action Hidden Detection (if needed)
-    _ = detect_price_action(df)
+    st.markdown(f"**Scalping Status:** {scalping_label}", unsafe_allow_html=True)
