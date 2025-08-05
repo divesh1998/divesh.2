@@ -6,7 +6,7 @@ import os
 from PIL import Image
 
 st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
-st.title("📈 Divesh Market Zone")
+st.title(":chart_with_upwards_trend: Divesh Market Zone")
 
 # --- Create save folder ---
 if not os.path.exists("saved_charts"):
@@ -29,19 +29,30 @@ def get_data(symbol, interval, period='7d'):
     df.dropna(inplace=True)
     return df
 
-# --- Trend Detection (EMA50 vs EMA200) ---
+# --- RSI Calculation ---
+def calculate_rsi(df, period=14):
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    df['RSI'] = rsi
+    return df
+
+# --- Trend Detection (Short-Term with EMA20 vs EMA50) ---
 def detect_trend(df):
+    df['EMA20'] = df['Close'].ewm(span=20).mean()
     df['EMA50'] = df['Close'].ewm(span=50).mean()
-    df['EMA200'] = df['Close'].ewm(span=200).mean()
-    ema_diff = df['EMA50'] - df['EMA200']
-    if ema_diff.iloc[-1] > 0 and ema_diff.iloc[-2] > 0 and ema_diff.iloc[-3] > 0:
+    if df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1] and df['EMA20'].iloc[-2] > df['EMA50'].iloc[-2]:
         return "Uptrend"
-    elif ema_diff.iloc[-1] < 0 and ema_diff.iloc[-2] < 0 and ema_diff.iloc[-3] < 0:
+    elif df['EMA20'].iloc[-1] < df['EMA50'].iloc[-1] and df['EMA20'].iloc[-2] < df['EMA50'].iloc[-2]:
         return "Downtrend"
     else:
         return "Sideways"
 
-# --- Scalping Signal (EMA10 vs EMA20) ---
+# --- Scalping Signal with EMA10/20 ---
 def generate_scalping_signals(df):
     df['EMA10'] = df['Close'].ewm(span=10).mean()
     df['EMA20'] = df['Close'].ewm(span=20).mean()
@@ -68,28 +79,19 @@ def generate_sl_tp(price, signal, trend):
     return round(sl, 2), round(tp, 2)
 
 # --- Accuracy ---
-def backtest_scalping_accuracy(df, trend):
+def backtest_scalping_accuracy(df):
     df = generate_scalping_signals(df)
     df['Return'] = df['Close'].pct_change().shift(-1)
     df['StrategyReturn'] = df['Signal'].shift(1) * df['Return']
-    
-    # Filter: allow signal only in matching trend
-    if trend == "Uptrend":
-        df = df[df['Signal'] >= 0]
-    elif trend == "Downtrend":
-        df = df[df['Signal'] <= 0]
-    else:
-        df = df[df['Signal'] == 0]
-
     total_signals = df[df['Signal'] != 0]
     correct = df[df['StrategyReturn'] > 0]
     accuracy = round(len(correct) / len(total_signals) * 100, 2) if len(total_signals) else 0
     return accuracy
 
 # --- Upload Chart ---
-uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"])
-trade_reason = st.text_area("📜 Enter Trade Reason")
-if st.button("💾 Save Chart & Reason"):
+uploaded_image = st.file_uploader(":camera: Upload Chart", type=["png", "jpg", "jpeg"])
+trade_reason = st.text_area(":scroll: Enter Trade Reason")
+if st.button(":floppy_disk: Save Chart & Reason"):
     if uploaded_image is not None:
         filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_image.name}"
         filepath = os.path.join("saved_charts", filename)
@@ -97,10 +99,10 @@ if st.button("💾 Save Chart & Reason"):
             f.write(uploaded_image.read())
         with open(filepath + ".txt", "w", encoding="utf-8") as f:
             f.write(trade_reason)
-        st.success("✅ Chart and Reason Saved!")
+        st.success("Chart and Reason Saved!")
 
 # --- Show Saved Charts ---
-st.subheader("📁 Saved Charts")
+st.subheader(":file_folder: Saved Charts")
 for file in os.listdir("saved_charts"):
     if file.lower().endswith((".png", ".jpg", ".jpeg")):
         st.image(os.path.join("saved_charts", file), width=350)
@@ -108,7 +110,7 @@ for file in os.listdir("saved_charts"):
         if os.path.exists(txt_file):
             with open(txt_file, "r", encoding="utf-8") as f:
                 reason = f.read()
-            st.caption(f"📜 Reason: {reason}")
+            st.caption(f":scroll: Reason: {reason}")
 
 # --- Multi-Timeframe Analysis ---
 for tf_label, tf_code in timeframes.items():
@@ -116,11 +118,13 @@ for tf_label, tf_code in timeframes.items():
     st.subheader(f"🕒 Timeframe: {tf_label}")
 
     df = get_data(symbol_yf, tf_code)
+    df = calculate_rsi(df)
     trend = detect_trend(df)
     df = generate_scalping_signals(df)
 
-    # --- Signal Filtering ---
-    if not df[df["Signal"] != 0].empty:
+    if tf_label in ["15M", "5M"] and trend == "Sideways":
+        signal = 0
+    elif not df[df["Signal"] != 0].empty:
         signal_index = df[df["Signal"] != 0].index[-1]
         signal = df.loc[signal_index, "Signal"]
         price = round(df.loc[signal_index, "Close"], 2)
@@ -129,31 +133,27 @@ for tf_label, tf_code in timeframes.items():
         signal = 0
         price = round(df["Close"].iloc[-1], 2)
 
-    # Avoid signal if opposite to trend
-    if (signal == 1 and trend == "Downtrend") or (signal == -1 and trend == "Uptrend"):
-        signal = 0
-
     sl, tp = generate_sl_tp(price, signal, trend)
     reward = abs(tp - price)
     risk = abs(price - sl)
     rr_ratio = round(reward / risk, 2) if risk != 0 else "∞"
-    signal_text = "🟢 Buy" if signal == 1 else "🔴 Sell" if signal == -1 else "⚪ No Signal"
 
-    accuracy = backtest_scalping_accuracy(df, trend)
+    signal_text = "🟢 Buy" if signal == 1 else "🔴 Sell" if signal == -1 else "⚪ No Signal"
+    accuracy = backtest_scalping_accuracy(df)
 
     st.write(f"**Trend:** `{trend}`")
     st.write(f"**Signal:** `{signal_text}`")
-    st.metric("🎯 Scalping Accuracy", f"{accuracy}%")
+    st.metric("🎯 Scalping Strategy Accuracy", f"{accuracy}%")
     st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
-    st.write(f"📊 Risk/Reward Ratio: `{rr_ratio}`")
+    st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
+    st.write(f"📈 **RSI:** `{round(df['RSI'].iloc[-1], 2)}`")
 
-    # --- Scalping Badge ---
     if tf_label in ["15M", "5M"]:
         if trend == "Sideways":
-            label = '<span style="color:orange; font-weight:bold;">⚠️ Scalping Zone (Sideways)</span>'
+            scalping_label = '<span style="color:orange; font-weight:bold;">⚠️ Scalping Zone (Sideways Market)</span>'
         else:
-            label = '<span style="color:green; font-weight:bold;">✅ Scalping Allowed</span>'
+            scalping_label = '<span style="color:green; font-weight:bold;">✅ Trend Zone (Scalping Allowed)</span>'
     else:
-        label = '<span style="color:gray;">🔍 Higher Timeframe (No Scalping)</span>'
+        scalping_label = '<span style="color:gray;">🔍 Higher Timeframe (Scalping Not Applicable)</span>'
 
-    st.markdown(f"**Scalping Status:** {label}", unsafe_allow_html=True)
+    st.markdown(f"**Scalping Status:** {scalping_label}", unsafe_allow_html=True)
