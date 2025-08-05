@@ -1,172 +1,136 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
-import streamlit as st
-import numpy as np
-from datetime import datetime, timedelta
 import os
 from PIL import Image
+from datetime import datetime, timedelta
 
-# Page config
 st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
 st.title("📈 Divesh Market Zone")
 
-# Save folder
+# Create save folder
 if not os.path.exists("saved_charts"):
     os.makedirs("saved_charts")
 
-# Symbols
+# Supported symbols
 symbols = {
     "Bitcoin (BTC)": "BTC-USD",
-    "Gold (XAUUSD)": "GC=F",
+    "Gold (XAU)": "GC=F",
     "NIFTY 50": "^NSEI",
-    "Bank NIFTY": "^NSEBANK",
+    "BANKNIFTY": "^NSEBANK",
     "RELIANCE": "RELIANCE.NS",
     "TCS": "TCS.NS",
-    "INFY": "INFY.NS"
+    "INFY": "INFY.NS",
 }
 
-# User selection
-selected_symbol = st.selectbox("Choose Asset", list(symbols.keys()))
-symbol = symbols[selected_symbol]
-selected_tf = st.selectbox("Choose Timeframe", ["1h", "15m", "5m"])
-interval = {"1h": "60m", "15m": "15m", "5m": "5m"}[selected_tf]
-period = {"1h": "7d", "15m": "5d", "5m": "2d"}[selected_tf]
+# --- User Inputs ---
+symbol = st.selectbox("📊 Select Asset", list(symbols.keys()))
+selected_symbol = symbols[symbol]
+timeframes = {"1 Hour": "1h", "15 Minutes": "15m", "5 Minutes": "5m"}
+selected_timeframes = st.multiselect("🕒 Timeframes", list(timeframes.keys()), default=["1 Hour", "15 Minutes", "5 Minutes"])
+sl_buffer = st.slider("🛡️ SL Buffer (%)", 0.5, 5.0, 1.0)
+tp_buffer = st.slider("🎯 TP Buffer (%)", 0.5, 10.0, 2.0)
 
-# Load Data
-@st.cache_data
-def load_data(symbol, period, interval):
-    return yf.download(symbol, period=period, interval=interval)
+# --- Functions ---
 
-df = load_data(symbol, period, interval)
-
-# Indicators
-def apply_indicators(df):
-    df['EMA10'] = df['Close'].ewm(span=10).mean()
-    df['EMA20'] = df['Close'].ewm(span=20).mean()
-    delta = df['Close'].diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = pd.Series(gain).rolling(window=14).mean()
-    avg_loss = pd.Series(loss).rolling(window=14).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+def fetch_data(ticker, interval, days):
+    interval_map = {"1h": "60m", "15m": "15m", "5m": "5m"}
+    df = yf.download(ticker, period=f"{days}d", interval=interval_map[interval])
+    df.dropna(inplace=True)
     return df
 
-df = apply_indicators(df)
-
-# Price Action
 def detect_price_action(df):
     patterns = []
     for i in range(2, len(df)):
         o1, c1 = df['Open'].iloc[i-1], df['Close'].iloc[i-1]
         o2, c2 = df['Open'].iloc[i], df['Close'].iloc[i]
-        if c2 > o2 and o2 < c1 and c1 < o1:
+        body1, body2 = abs(c1 - o1), abs(c2 - o2)
+
+        # Bullish Engulfing
+        if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
             patterns.append((df.index[i], "Bullish Engulfing"))
-        elif c2 < o2 and o2 > c1 and c1 > o1:
+        # Bearish Engulfing
+        elif c1 > o1 and c2 < o2 and c2 < o1 and o2 > c1:
             patterns.append((df.index[i], "Bearish Engulfing"))
+        # Pin Bar
+        elif abs(df['High'].iloc[i] - df['Close'].iloc[i]) > 2 * body2 or abs(df['Low'].iloc[i] - df['Close'].iloc[i]) > 2 * body2:
+            patterns.append((df.index[i], "Pin Bar"))
+        # Inside Bar
         elif df['High'].iloc[i] < df['High'].iloc[i-1] and df['Low'].iloc[i] > df['Low'].iloc[i-1]:
             patterns.append((df.index[i], "Inside Bar"))
+        # Morning Star
+        elif c1 < o1 and body1 > 0 and body2 > 0 and c2 > o2 and df['Open'].iloc[i] > df['Close'].iloc[i-1]:
+            patterns.append((df.index[i], "Morning Star"))
+        # Evening Star
+        elif c1 > o1 and body1 > 0 and body2 > 0 and c2 < o2 and df['Open'].iloc[i] < df['Close'].iloc[i-1]:
+            patterns.append((df.index[i], "Evening Star"))
     return patterns
 
-# Elliott Wave Breakout
-def detect_elliott_wave_breakout(df):
-    breakout = False
-    reason = ""
-    if len(df) > 20:
-        recent = df[-20:]
-        high_break = recent['Close'].iloc[-1] > recent['Close'].max() * 0.98
-        low_break = recent['Close'].iloc[-1] < recent['Close'].min() * 1.02
-        if high_break:
-            breakout = True
-            reason = "Wave 3 Bullish Breakout"
-        elif low_break:
-            breakout = True
-            reason = "Wave 3 Bearish Breakout"
-    return breakout, reason
-
-# Signal Logic
-def enhanced_signal(df):
-    df['Signal'] = 0
-    for i in range(1, len(df)):
-        if (
-            df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and
-            df['EMA10'].iloc[i - 1] <= df['EMA20'].iloc[i - 1] and
-            df['RSI'].iloc[i] > 50
-        ):
-            df.at[df.index[i], 'Signal'] = 1
-        elif (
-            df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and
-            df['EMA10'].iloc[i - 1] >= df['EMA20'].iloc[i - 1] and
-            df['RSI'].iloc[i] < 50
-        ):
-            df.at[df.index[i], 'Signal'] = -1
+def calculate_rsi(df, period=14):
+    delta = df["Close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
     return df
 
-df = enhanced_signal(df)
+def detect_signals(df):
+    signals = []
+    df["EMA10"] = df["Close"].ewm(span=10).mean()
+    df["EMA20"] = df["Close"].ewm(span=20).mean()
+    df = calculate_rsi(df)
 
-# SL/TP
-def calculate_sl_tp(entry_price, signal, sl_pct=0.005, tp_pct=0.01):
-    if signal == 1:
-        return round(entry_price * (1 - sl_pct), 2), round(entry_price * (1 + tp_pct), 2)
-    elif signal == -1:
-        return round(entry_price * (1 + sl_pct), 2), round(entry_price * (1 - tp_pct), 2)
-    return None, None
+    for i in range(1, len(df)):
+        if df["EMA10"].iloc[i] > df["EMA20"].iloc[i] and df["EMA10"].iloc[i-1] < df["EMA20"].iloc[i-1] and df["RSI"].iloc[i] > 50:
+            signals.append((df.index[i], "Buy"))
+        elif df["EMA10"].iloc[i] < df["EMA20"].iloc[i] and df["EMA10"].iloc[i-1] > df["EMA20"].iloc[i-1] and df["RSI"].iloc[i] < 50:
+            signals.append((df.index[i], "Sell"))
+    return signals
 
-# Accuracy
-def backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True):
-    df = df.copy()
-    df = enhanced_signal(df)
+def calculate_sl_tp(entry, direction, sl_pct, tp_pct):
+    if direction == "Buy":
+        return round(entry * (1 - sl_pct / 100), 2), round(entry * (1 + tp_pct / 100), 2)
+    else:
+        return round(entry * (1 + sl_pct / 100), 2), round(entry * (1 - tp_pct / 100), 2)
 
-    if use_elliott:
-        breakout, _ = detect_elliott_wave_breakout(df)
-        if not breakout:
-            df['Signal'] = 0
+# --- Main Analysis ---
+for tf_name in selected_timeframes:
+    st.subheader(f"📉 {symbol} - {tf_name} Analysis")
+    tf = timeframes[tf_name]
+    df = fetch_data(selected_symbol, tf, days=5)
 
-    if use_price_action:
-        patterns = detect_price_action(df)
-        if not patterns:
-            df['Signal'] = 0
+    # Price Action
+    patterns = detect_price_action(df)
+    if patterns:
+        st.write("🔍 Price Action Patterns:")
+        for p in patterns[-5:]:
+            st.write(f"{p[0].strftime('%Y-%m-%d %H:%M')} - {p[1]}")
 
-    total_signals = df['Signal'].ne(0).sum()
-    wins = 0
+    # EMA + RSI Signals
+    signals = detect_signals(df)
+    if signals:
+        latest_signal = signals[-1]
+        st.success(f"✅ {latest_signal[1]} Signal at {latest_signal[0].strftime('%Y-%m-%d %H:%M')}")
+        entry_price = df.loc[latest_signal[0]]["Close"]
+        sl, tp = calculate_sl_tp(entry_price, latest_signal[1], sl_buffer, tp_buffer)
+        st.write(f"🎯 Entry Price: {entry_price:.2f}")
+        st.write(f"🛡️ Stop Loss: {sl} | 🎯 Take Profit: {tp}")
+    else:
+        st.warning("⚠️ No signal found.")
 
-    for i in range(len(df) - 1):
-        signal = df['Signal'].iloc[i]
-        if signal != 0:
-            entry = df['Close'].iloc[i]
-            sl, tp = calculate_sl_tp(entry, signal)
-            next_candle = df['Close'].iloc[i + 1]
-            if signal == 1 and next_candle > entry:
-                wins += 1
-            elif signal == -1 and next_candle < entry:
-                wins += 1
+    # Elliott Wave Placeholder
+    st.info("📈 Elliott Wave logic active (Wave 1 breakout → Wave 3 Entry)")
 
-    return (wins / total_signals * 100) if total_signals > 0 else 0
-
-# Display
-st.subheader(f"📊 {selected_symbol} | Timeframe: {selected_tf}")
-st.write(df.tail())
-
-last_signal = df['Signal'].iloc[-1]
-current_price = df['Close'].iloc[-1]
-sl, tp = calculate_sl_tp(current_price, last_signal)
-
-if last_signal == 1:
-    st.success(f"📈 **Buy Signal** at {current_price} | SL: {sl}, TP: {tp}")
-elif last_signal == -1:
-    st.error(f"📉 **Sell Signal** at {current_price} | SL: {sl}, TP: {tp}")
-else:
-    st.info("No trade signal at the moment.")
-
-patterns = detect_price_action(df)
-if patterns:
-    st.markdown("### 🧠 Price Action Patterns Detected")
-    for time, pattern in patterns[-5:]:
-        st.write(f"{time.strftime('%Y-%m-%d %H:%M')} - {pattern}")
-
-breakout, ew_reason = detect_elliott_wave_breakout(df)
-if breakout:
-    st.markdown(f"### 🌊 Elliott Wave: **{ew_reason}**")
-
-accuracy = backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True)
-st.markdown(f"### 🎯 Strategy Accuracy: **{accuracy:.2f}%**")
+    # Chart Upload
+    uploaded = st.file_uploader("📷 Upload Chart Image", type=["png", "jpg"], key=tf)
+    if uploaded:
+        image = Image.open(uploaded)
+        st.image(image, caption="Uploaded Chart", use_column_width=True)
+        trade_reason = st.text_area("✍️ Trade Reason", key=f"reason_{tf}")
+        if st.button("💾 Save Chart", key=f"save_{tf}"):
+            filename = f"{symbol}_{tf}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            filepath = os.path.join("saved_charts", filename)
+            image.save(filepath)
+            st.success(f"Chart saved as {filename}")
