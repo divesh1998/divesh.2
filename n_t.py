@@ -30,6 +30,13 @@ def get_data(symbol, interval):
     try:
         df = yf.download(tickers=symbol, interval=interval, period=tf_map[interval])
         df.dropna(inplace=True)
+
+        # Ensure essential OHLC columns exist
+        required_cols = {'Open', 'High', 'Low', 'Close'}
+        if not required_cols.issubset(df.columns):
+            st.error("⚠️ Data is missing essential OHLC columns. Try a different timeframe or symbol.")
+            return pd.DataFrame()
+
         return df
     except Exception as e:
         st.error(f"Data fetch error: {e}")
@@ -100,7 +107,7 @@ def plot_chart(df, support, resistance):
 symbol = symbols[selected_symbol]
 data = get_data(symbol, selected_tf)
 
-if not data.empty:
+if not data.empty and {'Open', 'High', 'Low', 'Close'}.issubset(data.columns):
     sr_support, sr_resistance = detect_sr(data)
     pa_pattern = check_price_action(data)
     ewaves = detect_elliott_wave(data)
@@ -109,8 +116,12 @@ if not data.empty:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Signals")
-        for s in signals:
-            st.markdown(f"**{s['type']}** → {s['reason']}")
+        if signals:
+            for s in signals:
+                st.markdown(f"**{s['type']}** → {s['reason']}")
+        else:
+            st.markdown("❌ No signals generated.")
+
     with col2:
         st.subheader("Accuracy")
         st.markdown(f"📊 Price Action Accuracy: {calculate_accuracy(signals)}%")
@@ -118,7 +129,11 @@ if not data.empty:
 
     st.subheader("Chart")
     plot_chart(data, sr_support, sr_resistance)
-    
+
     st.markdown(f"📌 Detected Pattern: **{pa_pattern}**" if pa_pattern else "No strong pattern found.")
+
+    with st.expander("See Raw Data"):
+        st.dataframe(data.tail(20))
+
 else:
-    st.warning("No data available for selected asset/timeframe.")
+    st.warning("⚠️ No valid data available for the selected asset/timeframe.")
