@@ -31,12 +31,15 @@ def get_data(symbol, interval):
         df = yf.download(tickers=symbol, interval=interval, period=tf_map[interval])
         df.dropna(inplace=True)
 
-        # Ensure essential OHLC columns exist
         required_cols = {'Open', 'High', 'Low', 'Close'}
-        if not required_cols.issubset(df.columns):
-            st.error("⚠️ Data is missing essential OHLC columns. Try a different timeframe or symbol.")
+        if df.empty:
+            st.warning("⚠️ No data received. Try another asset or timeframe.")
             return pd.DataFrame()
-
+        elif not required_cols.issubset(df.columns):
+            st.warning("⚠️ Data is missing Open/High/Low/Close columns. Choose a different timeframe or asset.")
+            st.write("Columns received:", df.columns.tolist())
+            return pd.DataFrame()
+        
         return df
     except Exception as e:
         st.error(f"Data fetch error: {e}")
@@ -137,3 +140,4 @@ if not data.empty and {'Open', 'High', 'Low', 'Close'}.issubset(data.columns):
 
 else:
     st.warning("⚠️ No valid data available for the selected asset/timeframe.")
+
