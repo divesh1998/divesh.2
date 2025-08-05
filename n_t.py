@@ -82,9 +82,10 @@ def generate_scalping_signals(df):
     df['EMA20'] = df['Close'].ewm(span=20).mean()
     df['Signal'] = 0
     for i in range(1, len(df)):
-        if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1]:
+        trend = "Uptrend" if df["Close"].iloc[i] > df["Close"].iloc[i - 1] else "Downtrend"
+        if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1] and trend == "Uptrend":
             df.at[df.index[i], 'Signal'] = 1
-        elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1]:
+        elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1] and trend == "Downtrend":
             df.at[df.index[i], 'Signal'] = -1
     return df
 
@@ -195,3 +196,4 @@ for tf_label, tf_code in timeframes.items():
         st.error(f"❌ **Strong Sell Signal!**\nConfidence Score: {conf_score}/5")
     else:
         st.warning(f"⚠️ **Sideways / Neutral Market**\nConfidence Score: {conf_score}/5")
+
