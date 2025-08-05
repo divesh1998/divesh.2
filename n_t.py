@@ -38,7 +38,7 @@ def detect_trend(df):
     else:
         return "Downtrend"
 
-# --- RSI + EMA10/20 Scalping Signal ---
+# --- RSI + EMA Scalping Signal ---
 def generate_scalping_signals(df):
     df['EMA10'] = df['Close'].ewm(span=10).mean()
     df['EMA20'] = df['Close'].ewm(span=20).mean()
@@ -75,7 +75,17 @@ def generate_sl_tp(price, signal, trend):
         sl = tp = price
     return round(sl, 2), round(tp, 2)
 
-# --- Elliott Wave Detection (Same as before) ---
+# --- Scalping Strategy Accuracy ---
+def backtest_scalping_accuracy(df):
+    df = generate_scalping_signals(df.copy())
+    df['Return'] = df['Close'].pct_change().shift(-1)
+    df['StrategyReturn'] = df['Signal'].shift(1) * df['Return']
+    total_signals = df[df['Signal'] != 0]
+    correct = df[df['StrategyReturn'] > 0]
+    accuracy = round(len(correct) / len(total_signals) * 100, 2) if len(total_signals) else 0
+    return accuracy
+
+# --- Elliott Wave Detection ---
 def detect_elliott_wave_breakout(df):
     if len(df) < 6:
         return False, ""
@@ -90,7 +100,7 @@ def detect_elliott_wave_breakout(df):
         return True, "🌀 Elliott Wave 3 Downtrend Breakout Detected!"
     return False, ""
 
-# --- Price Action Detection (Keep Same) ---
+# --- Price Action Detection ---
 def detect_price_action(df):
     patterns = []
     for i in range(2, len(df)):
@@ -118,7 +128,7 @@ def detect_price_action(df):
                     patterns.append((df.index[i+1], "Evening Star"))
     return patterns
 
-# --- Upload Chart ---
+# --- Upload Chart & Reason ---
 uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"])
 trade_reason = st.text_area("📜 Enter Trade Reason")
 if st.button("💾 Save Chart & Reason"):
@@ -171,12 +181,16 @@ for tf_label, tf_code in timeframes.items():
     st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
     st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
 
+    accuracy = backtest_scalping_accuracy(df)
+    st.metric("🎯 Scalping Strategy Accuracy", f"{accuracy}%")
+
     if tf_label in ["15M", "5M"]:
         st.info("⚡ Scalping Signal Active (RSI + EMA10/20 + Trend Confirmed)")
 
-    # Optional Elliott & Price Action
+    # Elliott Wave Message
     breakout, message = detect_elliott_wave_breakout(df)
     if breakout:
         st.warning(message)
 
-    patterns = detect_price_action(df)
+    # Price Action Hidden Detection (if needed)
+    _ = detect_price_action(df)
