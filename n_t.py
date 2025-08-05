@@ -1,143 +1,120 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from datetime import datetime
+import yfinance as yf import pandas as pd import streamlit as st from datetime import datetime import os from PIL import Image
 
-# --- App setup ---
-st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
-st.title("📈 Divesh Market Zone - Multi-Asset Analysis")
+st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide") st.title("📈 Divesh Market Zone")
 
-# --- Symbols Dictionary ---
-symbols = {
-    "Gold (XAUUSD)": "XAUUSD=X",
-    "Bitcoin (BTCUSD)": "BTC-USD",
-    "NIFTY 50": "^NSEI",
-    "BANKNIFTY": "^NSEBANK"
+--- Create save folder ---
+
+if not os.path.exists("saved_charts"): os.makedirs("saved_charts")
+
+--- Symbols ---
+
+symbols = { "Bitcoin (BTC)": "BTC-USD", "Gold (XAU)": "GC=F" } symbol = st.selectbox("Select Asset", list(symbols.keys())) symbol_yf = symbols[symbol] timeframes = {"1H": "1h", "15M": "15m", "5M": "5m"}
+
+--- Data Fetch ---
+
+def get_data(symbol, interval, period='7d'): df = yf.download(symbol, interval=interval, period=period) if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0) df.dropna(inplace=True) return df
+
+--- Trend Detection ---
+
+def detect_trend(df): return "Uptrend" if df["Close"].iloc[-1] > df["Close"].iloc[-2] else "Downtrend"
+
+--- Price Action ---
+
+def detect_price_action(df): patterns = [] for i in range(2, len(df)): o1, c1, h1, l1 = df.iloc[i-1][["Open", "Close", "High", "Low"]] o2, c2, h2, l2 = df.iloc[i][["Open", "Close", "High", "Low"]]
+
+if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
+        patterns.append((df.index[i], "Bullish Engulfing"))
+    elif c1 > o1 and c2 < o2 and c2 < o1 and o2 > c1:
+        patterns.append((df.index[i], "Bearish Engulfing"))
+    elif h2 < h1 and l2 > l1:
+        patterns.append((df.index[i], "Inside Bar"))
+    body = abs(c2 - o2)
+    wick = h2 - l2
+    if body < wick * 0.3:
+        patterns.append((df.index[i], "Pin Bar"))
+    if c1 < o1 and abs(c2 - o2) < 0.2 * (h2 - l2):
+        if i+1 < len(df):
+            o3, c3 = df.iloc[i+1][["Open", "Close"]]
+            if c3 > o3:
+                patterns.append((df.index[i+1], "Morning Star"))
+    if c1 > o1 and abs(c2 - o2) < 0.2 * (h2 - l2):
+        if i+1 < len(df):
+            o3, c3 = df.iloc[i+1][["Open", "Close"]]
+            if c3 < o3:
+                patterns.append((df.index[i+1], "Evening Star"))
+return patterns
+
+--- Elliott Wave ---
+
+def detect_elliott_wave_breakout(df): if len(df) < 6: return False, "" wave1_start = df['Low'].iloc[-6] wave1_end = df['High'].iloc[-5] wave2 = df['Low'].iloc[-4] current_price = df['Close'].iloc[-1] trend = detect_trend(df) if trend == "Uptrend" and current_price > wave1_end: return True, "🌀 Elliott Wave 3 Uptrend Breakout Detected!" elif trend == "Downtrend" and current_price < wave2: return True, "🌀 Elliott Wave 3 Downtrend Breakout Detected!" return False, ""
+
+--- Scalping EMA10/EMA20 Signal ---
+
+def generate_scalping_signals(df): df['EMA10'] = df['Close'].ewm(span=10).mean() df['EMA20'] = df['Close'].ewm(span=20).mean() df['Signal'] = 0 for i in range(1, len(df)): if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1]: df.at[df.index[i], 'Signal'] = 1 elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1]: df.at[df.index[i], 'Signal'] = -1 return df
+
+--- SL/TP ---
+
+def generate_sl_tp(price, signal, trend): atr = 0.015 if trend == "Uptrend" else 0.02 rr = 2.0 if signal == 1: sl = price * (1 - atr) tp = price + (price - sl) * rr elif signal == -1: sl = price * (1 + atr) tp = price - (sl - price) * rr else: sl = tp = price return round(sl, 2), round(tp, 2)
+
+--- Confidence Meter ---
+
+def strategy_confidence(row): score = 0 reasons = [] if row.get("Bullish Engulfing"): score += 1 reasons.append("📈 Price Action bullish") if row.get("Bearish Engulfing"): score -= 1 reasons.append("📉 Price Action bearish") if row.get("Elliott_Wave_Breakout"): score += 1 reasons.append("🔮 Elliott Wave breakout") if row.get("EMA_Trend") == "Uptrend": score += 1 reasons.append("✅ EMA Uptrend") elif row.get("EMA_Trend") == "Downtrend": score -= 1 reasons.append("❌ EMA Downtrend") return score, ", ".join(reasons)
+
+--- Upload Chart ---
+
+uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"]) trade_reason = st.text_area("📜 Enter Trade Reason") if st.button("💾 Save Chart & Reason"): if uploaded_image is not None: filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_image.name}" filepath = os.path.join("saved_charts", filename) with open(filepath, "wb") as f: f.write(uploaded_image.read()) with open(filepath + ".txt", "w", encoding="utf-8") as f: f.write(trade_reason) st.success("✅ Chart and Reason Saved!")
+
+--- Show Saved Charts ---
+
+st.subheader("📁 Saved Charts") for file in os.listdir("saved_charts"): if file.lower().endswith((".png", ".jpg", ".jpeg")): st.image(os.path.join("saved_charts", file), width=350) txt_file = os.path.join("saved_charts", file + ".txt") if os.path.exists(txt_file): with open(txt_file, "r", encoding="utf-8") as f: reason = f.read() st.caption(f"📜 Reason: {reason}")
+
+--- Multi-Timeframe Analysis ---
+
+for tf_label, tf_code in timeframes.items(): st.markdown("---") st.subheader(f"🕒 Timeframe: {tf_label}")
+
+df = get_data(symbol_yf, tf_code)
+trend = detect_trend(df)
+df = generate_scalping_signals(df)
+
+if not df[df["Signal"] != 0].empty:
+    signal_index = df[df["Signal"] != 0].index[-1]
+    signal = df.loc[signal_index, "Signal"]
+    price = round(df.loc[signal_index, "Close"], 2)
+else:
+    signal_index = df.index[-1]
+    signal = 0
+    price = round(df["Close"].iloc[-1], 2)
+
+sl, tp = generate_sl_tp(price, signal, trend)
+reward = abs(tp - price)
+risk = abs(price - sl)
+rr_ratio = round(reward / risk, 2) if risk != 0 else "∞"
+signal_text = "Buy" if signal == 1 else "Sell" if signal == -1 else "No Signal"
+
+st.write(f"**Trend:** `{trend}`")
+st.write(f"**Signal:** `{signal_text}`")
+st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
+st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
+
+breakout, message = detect_elliott_wave_breakout(df)
+if breakout:
+    st.warning(message)
+
+patterns = detect_price_action(df)
+
+row = {
+    "Bullish Engulfing": any("Bullish Engulfing" in p[1] for p in patterns),
+    "Bearish Engulfing": any("Bearish Engulfing" in p[1] for p in patterns),
+    "Elliott_Wave_Breakout": breakout,
+    "EMA_Trend": trend
 }
 
-# --- User Inputs ---
-col1, col2 = st.columns(2)
-with col1:
-    selected_symbol = st.selectbox("Select Asset", list(symbols.keys()))
-with col2:
-    selected_tf = st.selectbox("Select Timeframe", ["1h", "15m", "5m"])
-
-# --- Data Fetch Function ---
-def get_data(symbol, interval):
-    tf_map = {"1h": "7d", "15m": "5d", "5m": "1d"}
-    try:
-        df = yf.download(tickers=symbol, interval=interval, period=tf_map[interval])
-        df.dropna(inplace=True)
-
-        required_cols = {'Open', 'High', 'Low', 'Close'}
-        if df.empty:
-            st.warning("⚠️ No data received. Try another asset or timeframe.")
-            return pd.DataFrame()
-        elif not required_cols.issubset(df.columns):
-            st.warning("⚠️ Data is missing Open/High/Low/Close columns. Choose a different timeframe or asset.")
-            st.write("Columns received:", df.columns.tolist())
-            return pd.DataFrame()
-        
-        return df
-    except Exception as e:
-        st.error(f"Data fetch error: {e}")
-        return pd.DataFrame()
-
-# --- Support & Resistance Detection ---
-def detect_sr(df, window=5):
-    support = []
-    resistance = []
-    for i in range(window, len(df) - window):
-        is_support = all(df['Low'][i] < df['Low'][i - j] and df['Low'][i] < df['Low'][i + j] for j in range(1, window))
-        is_resistance = all(df['High'][i] > df['High'][i - j] and df['High'][i] > df['High'][i + j] for j in range(1, window))
-        if is_support:
-            support.append((i, df['Low'][i]))
-        if is_resistance:
-            resistance.append((i, df['High'][i]))
-    return support, resistance
-
-# --- Price Action Pattern ---
-def check_price_action(df):
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    if last['Close'] > last['Open'] and prev['Close'] < prev['Open'] and last['Open'] <= prev['Close']:
-        return "Bullish Engulfing"
-    if last['Close'] < last['Open'] and prev['Close'] > prev['Open'] and last['Open'] >= prev['Close']:
-        return "Bearish Engulfing"
-    return None
-
-# --- Elliott Wave Detection (Simplified) ---
-def detect_elliott_wave(df):
-    swing_points = []
-    for i in range(2, len(df)-2):
-        if df['High'][i] > df['High'][i-1] and df['High'][i] > df['High'][i+1]:
-            swing_points.append((i, df['High'][i]))
-        elif df['Low'][i] < df['Low'][i-1] and df['Low'][i] < df['Low'][i+1]:
-            swing_points.append((i, df['Low'][i]))
-    return swing_points[:6]  # First 6 swings as dummy Wave 1–5
-
-# --- Accuracy Tracker ---
-def calculate_accuracy(signals):
-    if len(signals) == 0:
-        return 0
-    return round((sum(1 for s in signals if s['result'] == 'Profit') / len(signals)) * 100, 2)
-
-# --- Signal Generator ---
-def generate_signals(df, support, resistance):
-    signals = []
-    last_candle = df.iloc[-1]
-    for i, level in support:
-        if abs(last_candle['Close'] - level) < 0.2 and last_candle['Close'] > last_candle['Open']:
-            signals.append({"type": "Buy", "reason": "Bullish candle at support", "result": "Profit"})
-    for i, level in resistance:
-        if abs(last_candle['Close'] - level) < 0.2 and last_candle['Close'] < last_candle['Open']:
-            signals.append({"type": "Sell", "reason": "Bearish candle at resistance", "result": "Profit"})
-    return signals
-
-# --- Plotting Chart ---
-def plot_chart(df, support, resistance):
-    fig = go.Figure()
-    fig.add_candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])
-    for s in support:
-        fig.add_hline(y=s[1], line=dict(color='green', dash='dot'))
-    for r in resistance:
-        fig.add_hline(y=r[1], line=dict(color='red', dash='dot'))
-    st.plotly_chart(fig, use_container_width=True)
-
-# --- Main Execution ---
-symbol = symbols[selected_symbol]
-data = get_data(symbol, selected_tf)
-
-if not data.empty and {'Open', 'High', 'Low', 'Close'}.issubset(data.columns):
-    sr_support, sr_resistance = detect_sr(data)
-    pa_pattern = check_price_action(data)
-    ewaves = detect_elliott_wave(data)
-    signals = generate_signals(data, sr_support, sr_resistance)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Signals")
-        if signals:
-            for s in signals:
-                st.markdown(f"**{s['type']}** → {s['reason']}")
-        else:
-            st.markdown("❌ No signals generated.")
-
-    with col2:
-        st.subheader("Accuracy")
-        st.markdown(f"📊 Price Action Accuracy: {calculate_accuracy(signals)}%")
-        st.markdown(f"🔮 Elliott Wave Swings: {len(ewaves)} points")
-
-    st.subheader("Chart")
-    plot_chart(data, sr_support, sr_resistance)
-
-    st.markdown(f"📌 Detected Pattern: **{pa_pattern}**" if pa_pattern else "No strong pattern found.")
-
-    with st.expander("See Raw Data"):
-        st.dataframe(data.tail(20))
-
+conf_score, conf_reason = strategy_confidence(row)
+st.subheader("📊 Pro Strategy Confidence Meter")
+if conf_score >= 3:
+    st.success(f"✅ **Strong Buy Signal!**\nConfidence Score: {conf_score}/5")
+elif conf_score <= -3:
+    st.error(f"❌ **Strong Sell Signal!**\nConfidence Score: {conf_score}/5")
 else:
-    st.warning("⚠️ No valid data available for the selected asset/timeframe.")
+    st.warning(f"⚠️ **Sideways / Neutral Market**\nConfidence Score: {conf_score}/5")
 
