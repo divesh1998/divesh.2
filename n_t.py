@@ -29,11 +29,68 @@ def get_data(symbol, interval, period='7d'):
     df.dropna(inplace=True)
     return df
 
-# --- Trend Detection ---
+# --- Trend Detection using EMA20/50 ---
 def detect_trend(df):
-    return "Uptrend" if df["Close"].iloc[-1] > df["Close"].iloc[-2] else "Downtrend"
+    df['EMA20'] = df['Close'].ewm(span=20).mean()
+    df['EMA50'] = df['Close'].ewm(span=50).mean()
+    if df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1]:
+        return "Uptrend"
+    else:
+        return "Downtrend"
 
-# --- Price Action ---
+# --- RSI + EMA10/20 Scalping Signal ---
+def generate_scalping_signals(df):
+    df['EMA10'] = df['Close'].ewm(span=10).mean()
+    df['EMA20'] = df['Close'].ewm(span=20).mean()
+    df['EMA50'] = df['Close'].ewm(span=50).mean()
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    df['Signal'] = 0
+
+    for i in range(1, len(df)):
+        trend = "Uptrend" if df['EMA20'].iloc[i] > df['EMA50'].iloc[i] else "Downtrend"
+        rsi = df['RSI'].iloc[i]
+        if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1] and trend == "Uptrend" and rsi < 70:
+            df.at[df.index[i], 'Signal'] = 1
+        elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1] and trend == "Downtrend" and rsi > 30:
+            df.at[df.index[i], 'Signal'] = -1
+    return df
+
+# --- SL/TP Calculation ---
+def generate_sl_tp(price, signal, trend):
+    atr = 0.015 if trend == "Uptrend" else 0.02
+    rr = 2.0
+    if signal == 1:
+        sl = price * (1 - atr)
+        tp = price + (price - sl) * rr
+    elif signal == -1:
+        sl = price * (1 + atr)
+        tp = price - (sl - price) * rr
+    else:
+        sl = tp = price
+    return round(sl, 2), round(tp, 2)
+
+# --- Elliott Wave Detection (Same as before) ---
+def detect_elliott_wave_breakout(df):
+    if len(df) < 6:
+        return False, ""
+    wave1_start = df['Low'].iloc[-6]
+    wave1_end = df['High'].iloc[-5]
+    wave2 = df['Low'].iloc[-4]
+    current_price = df['Close'].iloc[-1]
+    trend = detect_trend(df)
+    if trend == "Uptrend" and current_price > wave1_end:
+        return True, "🌀 Elliott Wave 3 Uptrend Breakout Detected!"
+    elif trend == "Downtrend" and current_price < wave2:
+        return True, "🌀 Elliott Wave 3 Downtrend Breakout Detected!"
+    return False, ""
+
+# --- Price Action Detection (Keep Same) ---
 def detect_price_action(df):
     patterns = []
     for i in range(2, len(df)):
@@ -60,69 +117,6 @@ def detect_price_action(df):
                 if c3 < o3:
                     patterns.append((df.index[i+1], "Evening Star"))
     return patterns
-
-# --- Elliott Wave ---
-def detect_elliott_wave_breakout(df):
-    if len(df) < 6:
-        return False, ""
-    wave1_start = df['Low'].iloc[-6]
-    wave1_end = df['High'].iloc[-5]
-    wave2 = df['Low'].iloc[-4]
-    current_price = df['Close'].iloc[-1]
-    trend = detect_trend(df)
-    if trend == "Uptrend" and current_price > wave1_end:
-        return True, "🌀 Elliott Wave 3 Uptrend Breakout Detected!"
-    elif trend == "Downtrend" and current_price < wave2:
-        return True, "🌀 Elliott Wave 3 Downtrend Breakout Detected!"
-    return False, ""
-
-# --- Scalping EMA10/EMA20 Signal ---
-def generate_scalping_signals(df):
-    df['EMA10'] = df['Close'].ewm(span=10).mean()
-    df['EMA20'] = df['Close'].ewm(span=20).mean()
-    df['Signal'] = 0
-    for i in range(1, len(df)):
-        trend = "Uptrend" if df["Close"].iloc[i] > df["Close"].iloc[i - 1] else "Downtrend"
-        if df['EMA10'].iloc[i] > df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] <= df['EMA20'].iloc[i-1] and trend == "Uptrend":
-            df.at[df.index[i], 'Signal'] = 1
-        elif df['EMA10'].iloc[i] < df['EMA20'].iloc[i] and df['EMA10'].iloc[i-1] >= df['EMA20'].iloc[i-1] and trend == "Downtrend":
-            df.at[df.index[i], 'Signal'] = -1
-    return df
-
-# --- SL/TP ---
-def generate_sl_tp(price, signal, trend):
-    atr = 0.015 if trend == "Uptrend" else 0.02
-    rr = 2.0
-    if signal == 1:
-        sl = price * (1 - atr)
-        tp = price + (price - sl) * rr
-    elif signal == -1:
-        sl = price * (1 + atr)
-        tp = price - (sl - price) * rr
-    else:
-        sl = tp = price
-    return round(sl, 2), round(tp, 2)
-
-# --- Confidence Meter ---
-def strategy_confidence(row):
-    score = 0
-    reasons = []
-    if row.get("Bullish Engulfing"):
-        score += 1
-        reasons.append("📈 Price Action bullish")
-    if row.get("Bearish Engulfing"):
-        score -= 1
-        reasons.append("📉 Price Action bearish")
-    if row.get("Elliott_Wave_Breakout"):
-        score += 1
-        reasons.append("🔮 Elliott Wave breakout")
-    if row.get("EMA_Trend") == "Uptrend":
-        score += 1
-        reasons.append("✅ EMA Uptrend")
-    elif row.get("EMA_Trend") == "Downtrend":
-        score -= 1
-        reasons.append("❌ EMA Downtrend")
-    return score, ", ".join(reasons)
 
 # --- Upload Chart ---
 uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"])
@@ -152,6 +146,7 @@ for file in os.listdir("saved_charts"):
 for tf_label, tf_code in timeframes.items():
     st.markdown("---")
     st.subheader(f"🕒 Timeframe: {tf_label}")
+    
     df = get_data(symbol_yf, tf_code)
     trend = detect_trend(df)
     df = generate_scalping_signals(df)
@@ -176,24 +171,12 @@ for tf_label, tf_code in timeframes.items():
     st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
     st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
 
+    if tf_label in ["15M", "5M"]:
+        st.info("⚡ Scalping Signal Active (RSI + EMA10/20 + Trend Confirmed)")
+
+    # Optional Elliott & Price Action
     breakout, message = detect_elliott_wave_breakout(df)
     if breakout:
         st.warning(message)
 
     patterns = detect_price_action(df)
-    row = {
-        "Bullish Engulfing": any("Bullish Engulfing" in p[1] for p in patterns),
-        "Bearish Engulfing": any("Bearish Engulfing" in p[1] for p in patterns),
-        "Elliott_Wave_Breakout": breakout,
-        "EMA_Trend": trend
-    }
-
-    conf_score, conf_reason = strategy_confidence(row)
-    st.subheader("📊 Pro Strategy Confidence Meter")
-    if conf_score >= 3:
-        st.success(f"✅ **Strong Buy Signal!**\nConfidence Score: {conf_score}/5")
-    elif conf_score <= -3:
-        st.error(f"❌ **Strong Sell Signal!**\nConfidence Score: {conf_score}/5")
-    else:
-        st.warning(f"⚠️ **Sideways / Neutral Market**\nConfidence Score: {conf_score}/5")
-
