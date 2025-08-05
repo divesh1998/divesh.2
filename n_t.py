@@ -1,4 +1,4 @@
-    ✅ Final Version of Streamlit App: Divesh Market Zone with EMA10/20 + RSI Confirmation + Elliott + PA
+✅ Final Version of Streamlit App: Divesh Market Zone with EMA10/20 + RSI Confirmation + Elliott + PA
 
 import yfinance as yf import pandas as pd import streamlit as st from datetime import datetime import os from PIL import Image
 
