@@ -39,18 +39,27 @@ def calculate_rsi(df, period=14):
 def detect_price_action(df):
     patterns = []
     if len(df) < 3:
-        return patterns  # ✅ prevent error if not enough candles
+        return patterns  # Not enough data
+    df = df.dropna(subset=["Open", "Close"])  # Drop rows with missing Open/Close
+
     for i in range(2, len(df)):
-        o1, c1 = df['Open'].iloc[i - 2], df['Close'].iloc[i - 2]
-        o2, c2 = df['Open'].iloc[i - 1], df['Close'].iloc[i - 1]
-        if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
-            patterns.append((df.index[i], 'Bullish Engulfing'))
-        elif c1 > o1 and c2 < o2 and c2 < o1 and o2 > c1:
-            patterns.append((df.index[i], 'Bearish Engulfing'))
+        try:
+            o1, c1 = df['Open'].iloc[i - 2], df['Close'].iloc[i - 2]
+            o2, c2 = df['Open'].iloc[i - 1], df['Close'].iloc[i - 1]
+
+            if pd.isna(o1) or pd.isna(c1) or pd.isna(o2) or pd.isna(c2):
+                continue  # Skip if any value is missing
+
+            if c1 < o1 and c2 > o2 and c2 > o1 and o2 < c1:
+                patterns.append((df.index[i], 'Bullish Engulfing'))
+            elif c1 > o1 and c2 < o2 and c2 < o1 and o2 > c1:
+                patterns.append((df.index[i], 'Bearish Engulfing'))
+        except Exception:
+            continue
     return patterns
 
 def detect_elliott_wave_breakout(df):
-    if len(df) < 20:
+    if len(df) < 21:
         return False, None
     breakout = df['Close'].iloc[-1] > df['Close'].rolling(window=20).max().iloc[-2]
     return breakout, None
@@ -92,8 +101,8 @@ tp_buffer = st.slider("TP Buffer (%)", 0.5, 10.0, 2.0)
 interval_map = {"1h": "60m", "15m": "15m", "5m": "5m"}
 df = yf.download(symbols[asset], period="5d", interval=interval_map[timeframe])
 
-if df.empty or len(df) < 3:
-    st.warning("Not enough data found for the selected asset/timeframe.")
+if df.empty or len(df) < 21:
+    st.warning("Not enough data for analysis.")
     st.stop()
 
 # --- Apply Strategy ---
