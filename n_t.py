@@ -2,140 +2,111 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
+import datetime
 import requests
-import datetime as dt
+from ta.trend import EMAIndicator
+from ta.momentum import RSIIndicator
+import plotly.graph_objects as go
 
-# --- App Setup ---
-st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
-st.title("📈 Divesh Market Zone - Swing + Intraday + Futures Analysis")
-
-# --- Symbol Input ---
-symbols = {
-    "Bitcoin (BTC)": "BTC-USD",
-    "Gold (XAUUSD)": "GC=F",
-    "NIFTY 50": "^NSEI",
-    "BANKNIFTY": "^NSEBANK",
-    "RELIANCE": "RELIANCE.NS",
-    "TCS": "TCS.NS",
-    "INFY": "INFY.NS"
-}
-symbol = st.selectbox("📌 Select Asset", list(symbols.keys()))
-ticker = symbols[symbol]
-
-# --- Telegram Setup ---
+# --- Telegram Config ---
 TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
 CHAT_ID = "YOUR_CHAT_ID"
 
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
-    requests.post(url, data=data)
+def send_telegram_alert(message):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": message}
+        requests.post(url, data=payload)
+    except Exception as e:
+        st.error(f"Telegram Error: {e}")
 
-# --- Load Data ---
-@st.cache_data(ttl=3600)
-def load_data(ticker, interval, period):
-    df = yf.download(ticker, interval=interval, period=period)
+# --- App Setup ---
+st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
+st.title("📊 Divesh Market Zone - Swing & Intraday Analysis")
+
+# --- Asset Selection ---
+symbols = {
+    "Bitcoin (BTC)": "BTC-USD",
+    "Gold (XAUUSD)": "GC=F",
+    "Nifty 50": "^NSEI",
+    "Bank Nifty": "^NSEBANK",
+    "Reliance (Futures)": "RELIANCE.BO",
+    "TCS (Futures)": "TCS.BO"
+}
+symbol_name = st.selectbox("📌 Choose Asset", list(symbols.keys()))
+ticker = symbols[symbol_name]
+
+# --- Timeframe ---
+timeframe = st.selectbox("⏱️ Select Timeframe", ["1d", "4h", "1h", "15m", "5m"])
+period_map = {"1d": "6mo", "4h": "60d", "1h": "30d", "15m": "7d", "5m": "5d"}
+interval_map = {"1d": "1d", "4h": "1h", "1h": "1h", "15m": "15m", "5m": "5m"}
+
+# --- Fetch Data ---
+@st.cache_data
+def load_data(ticker, period, interval):
+    df = yf.download(ticker, period=period, interval=interval)
     df.dropna(inplace=True)
-    df.reset_index(inplace=True)
     return df
 
-# --- EMA Trend ---
-def ema_trend(df):
-    df['EMA20'] = df['Close'].ewm(span=20).mean()
-    df['EMA50'] = df['Close'].ewm(span=50).mean()
-    trend = "Uptrend" if df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1] else "Downtrend"
-    return trend
+df = load_data(ticker, period_map[timeframe], interval_map[timeframe])
 
-# --- Fibonacci Support ---
-def fibonacci_levels(df):
-    max_price = df['High'].max()
-    min_price = df['Low'].min()
-    diff = max_price - min_price
-    levels = {
-        "0.0%": max_price,
-        "23.6%": max_price - 0.236 * diff,
-        "38.2%": max_price - 0.382 * diff,
-        "50.0%": max_price - 0.5 * diff,
-        "61.8%": max_price - 0.618 * diff,
-        "78.6%": max_price - 0.786 * diff,
-        "100.0%": min_price
-    }
-    return levels
+# --- Fibonacci & Elliott Wave (Simplified Logic) ---
+def apply_elliott_wave(df):
+    wave_signals = []
+    fib_levels = []
+    for i in range(5, len(df)):
+        recent = df.iloc[i-5:i]
+        low = recent['Low'].min()
+        high = recent['High'].max()
+        retracement = (high - low) * 0.618
+        level = high - retracement
+        close = df.iloc[i]['Close']
+        if close > high:
+            wave_signals.append((df.index[i], "Wave 3 Breakout (Buy)", close))
+            fib_levels.append((df.index[i], high, level))
+        elif close < low:
+            wave_signals.append((df.index[i], "Wave 3 Breakdown (Sell)", close))
+            fib_levels.append((df.index[i], low, low + retracement))
+    return wave_signals, fib_levels
 
-# --- Elliott Wave Detection (Basic) ---
-def elliott_wave(df):
-    wave = None
-    if df['High'].iloc[-1] > df['High'].iloc[-2] and df['Low'].iloc[-1] > df['Low'].iloc[-2]:
-        wave = "Wave 3 - Breakout Possible"
-    elif df['Low'].iloc[-1] < df['Low'].iloc[-2] and df['High'].iloc[-1] < df['High'].iloc[-2]:
-        wave = "Wave C - Downside Correction"
-    return wave
+wave_signals, fib_levels = apply_elliott_wave(df)
 
-# --- Price Action ---
-def price_action(df):
-    signals = []
-    for i in range(2, len(df)):
-        open_, close = df['Open'][i], df['Close'][i]
-        prev_open, prev_close = df['Open'][i-1], df['Close'][i-1]
+# --- Plotting ---
+fig = go.Figure()
+fig.add_trace(go.Candlestick(
+    x=df.index,
+    open=df['Open'],
+    high=df['High'],
+    low=df['Low'],
+    close=df['Close'],
+    name='Candles'))
 
-        # Bullish Engulfing
-        if close > open_ and prev_close < prev_open and close > prev_open and open_ < prev_close:
-            signals.append((df['Datetime'][i], 'Bullish Engulfing'))
-        # Bearish Engulfing
-        elif close < open_ and prev_close > prev_open and close < prev_open and open_ > prev_close:
-            signals.append((df['Datetime'][i], 'Bearish Engulfing'))
-    return signals
+# Plot Fibonacci
+for time, high, level in fib_levels[-5:]:
+    fig.add_hline(y=level, line=dict(color='blue', dash='dot'), annotation_text="Fibo 0.618", annotation_position="top right")
 
-# --- Trendline Breakout (simplified) ---
-def trendline_breakout(df):
-    recent_high = df['High'][-5:].max()
-    recent_low = df['Low'][-5:].min()
-    last_close = df['Close'].iloc[-1]
+# Plot Signals
+for time, signal, price in wave_signals[-5:]:
+    fig.add_trace(go.Scatter(x=[time], y=[price],
+        mode='markers+text',
+        marker=dict(color='green' if "Buy" in signal else 'red', size=10),
+        text=[signal],
+        textposition="top center"))
 
-    if last_close > recent_high:
-        return "Resistance Breakout"
-    elif last_close < recent_low:
-        return "Support Breakdown"
-    return "No Breakout"
+st.plotly_chart(fig, use_container_width=True)
 
-# --- Timeframe Analysis ---
-timeframes = {
-    "1D": ("1d", "3mo"),
-    "4H": ("1h", "60d"),
-    "1H": ("1h", "15d"),
-    "15M": ("15m", "7d"),
-    "5M": ("5m", "5d")
-}
+# --- Alerts Display ---
+if wave_signals:
+    st.subheader("📢 Trade Signals")
+    for time, signal, price in wave_signals[-3:]:
+        st.markdown(f"**🕒 {time.strftime('%Y-%m-%d %H:%M')}** — {signal} at `{round(price, 2)}`")
+        send_telegram_alert(f"{symbol_name} {signal} at {round(price, 2)}")
 
-for label, (interval, period) in timeframes.items():
-    st.subheader(f"📊 {label} Analysis")
-    df = load_data(ticker, interval, period)
-    df.rename(columns={"Datetime": "Datetime"}, inplace=True)
-    trend = ema_trend(df)
-    fibo = fibonacci_levels(df)
-    wave = elliott_wave(df)
-    pa = price_action(df)
-    breakout = trendline_breakout(df)
-
-    st.write(f"🔹 Trend: **{trend}**")
-    st.write(f"🔹 Elliott Wave Signal: **{wave or 'Neutral'}**")
-    st.write(f"🔹 Trendline Breakout: **{breakout}**")
-
-    if pa:
-        st.markdown("🔍 **Price Action Patterns:**")
-        for ts, pat in pa[-3:]:
-            st.write(f"{ts} - {pat}")
-
-    with st.expander(f"📉 Fibonacci Levels ({label})"):
-        for level, price in fibo.items():
-            st.write(f"{level}: {round(price, 2)}")
-
-    # Send alert for 15M or 5M signals
-    if label in ["15M", "5M"]:
-        if wave or breakout != "No Breakout":
-            message = f"⚠️ {label} ALERT for {symbol}\nTrend: {trend}\nWave: {wave}\nBreakout: {breakout}"
-            send_telegram(message)
-
-# --- Note ---
-st.info("This app provides swing and intraday signals using Elliott Wave + Fibonacci + Price Action + Trendline logic. Use proper risk management.")
+# --- Strategy Summary ---
+st.sidebar.markdown("### Strategy Summary")
+st.sidebar.markdown("""
+- ✅ **Fibonacci 0.618** retracement with breakout logic  
+- ✅ **Wave 3 Confirmation** = Entry trigger  
+- ✅ Futures & Spot Support  
+- ✅ Real-Time Telegram Alert  
+""")
