@@ -1,220 +1,93 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import streamlit as st
+import numpy as np
+from ta.trend import EMAIndicator
+from ta.momentum import RSIIndicator
 from datetime import datetime
-import os
-from PIL import Image
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
-st.title("📈 Divesh Market Zone - Swing + Intraday + Futures Analysis")
+st.title("📈 Divesh Market Zone")
 
-# --- Create Save Folder ---
-if not os.path.exists("saved_charts"):
-    os.makedirs("saved_charts")
-
-# --- Symbols Dictionary ---
-symbols = {
+# --- Asset selection ---
+assets = {
     "Bitcoin (BTC)": "BTC-USD",
-    "Gold (XAUUSD)": "XAUUSD=X",
+    "Gold (XAUUSD)": "GC=F",
     "NIFTY 50": "^NSEI",
-    "BANKNIFTY": "^NSEBANK",
-    "Reliance": "RELIANCE.NS",
-    "TCS": "TCS.NS",
-    "Infosys": "INFY.NS",
-    "HDFC Bank": "HDFCBANK.NS",
-    "ICICI Bank": "ICICIBANK.NS",
-    "SBI": "SBIN.NS",
-    "Axis Bank": "AXISBANK.NS",
-    "Kotak Bank": "KOTAKBANK.NS",
-    "L&T": "LT.NS",
-    "ITC": "ITC.NS",
-    "HUL": "HINDUNILVR.NS",
-    "Airtel": "BHARTIARTL.NS",
-    "Maruti": "MARUTI.NS",
-    "Bajaj Finance": "BAJFINANCE.NS",
-    "HCL Tech": "HCLTECH.NS",
-    "Wipro": "WIPRO.NS",
-    "NTPC": "NTPC.NS",
-    "ONGC": "ONGC.NS",
-    "UltraTech": "ULTRACEMCO.NS",
-    "Titan": "TITAN.NS",
-    "Tata Motors": "TATAMOTORS.NS",
-    "TechM": "TECHM.NS",
-    "Adani Ports": "ADANIPORTS.NS",
-    "JSW Steel": "JSWSTEEL.NS",
-    "Power Grid": "POWERGRID.NS"
+    "BANKNIFTY": "^NSEBANK"
 }
 
+selected_asset = st.selectbox("📌 Select Asset", list(assets.keys()))
+symbol = assets[selected_asset]
+
+# --- Timeframe selection ---
 timeframes = {
-    "1 Hour": "60m",
-    "15 Minutes": "15m",
-    "5 Minutes": "5m"
+    "1D": "1d",
+    "4H": "60m",
+    "1H": "60m",
+    "15M": "15m",
+    "5M": "5m"
 }
+selected_tf = st.selectbox("🕒 Select Timeframe", list(timeframes.keys()))
+interval = timeframes[selected_tf]
 
-# --- Functions ---
-def get_data(symbol, interval):
-    return yf.download(tickers=symbol, period="7d", interval=interval, progress=False)
-
-def detect_trend(df):
-    ema20 = df['Close'].ewm(span=20).mean().dropna()
-    ema50 = df['Close'].ewm(span=50).mean().dropna()
-    if len(ema20) == 0 or len(ema50) == 0:
-        return "Unknown"
-    return "Uptrend" if ema20.iloc[-1] > ema50.iloc[-1] else "Downtrend"
-
-def detect_elliott_wave_breakout(df):
-    recent = df['Close'].iloc[-1]
-    past = df['Close'].iloc[-10]
-    breakout = recent > past * 1.02 or recent < past * 0.98
-    msg = "📈 Elliott Wave breakout detected!" if breakout else ""
-    return breakout, msg
-
-def detect_price_action(df):
-    patterns = []
-    for i in range(2, len(df)):
-        prev, curr = df.iloc[i-1], df.iloc[i]
-        if curr['Close'] > curr['Open'] and prev['Close'] < prev['Open'] and curr['Close'] > prev['Open'] and curr['Open'] < prev['Close']:
-            patterns.append((df.index[i], "Bullish Engulfing"))
-        elif curr['Close'] < curr['Open'] and prev['Close'] > prev['Open'] and curr['Open'] > prev['Close'] and curr['Close'] < prev['Open']:
-            patterns.append((df.index[i], "Bearish Engulfing"))
-    return patterns
-
-def strategy_confidence(row):
-    score = 0
-    if row["Bullish Engulfing"]: score += 1
-    if row["Bearish Engulfing"]: score -= 1
-    if row["Elliott_Wave_Breakout"]: score += 1
-    if row["EMA_Trend"] == "Uptrend": score += 1
-    elif row["EMA_Trend"] == "Downtrend": score -= 1
-    return score, f"Score: {score}"
-
-def generate_signals(df, use_elliott=False, use_price_action=False):
-    df['EMA20'] = df['Close'].ewm(span=20).mean()
-    df['EMA50'] = df['Close'].ewm(span=50).mean()
-    df['Signal'] = 0
-    trend = detect_trend(df)
-    if trend == "Uptrend":
-        df.loc[df['EMA20'] > df['EMA50'], 'Signal'] = 1
-    elif trend == "Downtrend":
-        df.loc[df['EMA20'] < df['EMA50'], 'Signal'] = -1
-    if use_elliott:
-        breakout, _ = detect_elliott_wave_breakout(df)
-        if not breakout:
-            df['Signal'] = 0
-    if use_price_action:
-        patterns = detect_price_action(df)
-        if not patterns:
-            df['Signal'] = 0
-    df['Return'] = df['Close'].pct_change().shift(-1)
-    df['StrategyReturn'] = df['Signal'].shift(1) * df['Return']
+# --- Fetch Data ---
+def get_data(symbol, interval, period="30d"):
+    df = yf.download(symbol, interval=interval, period=period)
+    df.dropna(inplace=True)
     return df
 
-def backtest_strategy_accuracy(df, use_elliott=False, use_price_action=False):
-    df = generate_signals(df, use_elliott, use_price_action)
-    total = df[df['Signal'] != 0]
-    correct = df[df['StrategyReturn'] > 0]
-    return round(len(correct) / len(total) * 100, 2) if len(total) else 0
+df = get_data(symbol, interval)
 
-def accuracy_over_days(df):
-    df = generate_signals(df)
-    df['Date'] = df.index.date
-    return df.groupby('Date').apply(
-        lambda x: (x['StrategyReturn'] > 0).sum() / (x['Signal'] != 0).sum() * 100 if (x['Signal'] != 0).sum() > 0 else 0
-    ).reset_index(name="Daily Accuracy")
+# --- Indicators ---
+df['EMA20'] = EMAIndicator(df['Close'], window=20).ema_indicator()
+df['EMA50'] = EMAIndicator(df['Close'], window=50).ema_indicator()
+df['RSI'] = RSIIndicator(df['Close'], window=14).rsi()
 
-def generate_sl_tp(price, signal, trend):
-    sl = price * 0.99 if signal == 1 else price * 1.01
-    tp = price * 1.02 if signal == 1 else price * 0.98
-    return round(sl, 2), round(tp, 2)
-
-# --- UI Section ---
-selected_symbol = st.selectbox("📌 Select Asset", list(symbols.keys()))
-symbol_yf = symbols[selected_symbol]
-
-# --- Upload Chart ---
-uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"])
-trade_reason = st.text_area("📜 Enter Trade Reason")
-if st.button("💾 Save Chart & Reason"):
-    if uploaded_image is not None:
-        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_image.name}"
-        filepath = os.path.join("saved_charts", filename)
-        with open(filepath, "wb") as f:
-            f.write(uploaded_image.read())
-        with open(filepath + ".txt", "w", encoding="utf-8") as f:
-            f.write(trade_reason)
-        st.success("✅ Chart and Reason Saved!")
-
-# --- Show Saved Charts ---
-st.subheader("📁 Saved Charts")
-for file in os.listdir("saved_charts"):
-    if file.lower().endswith((".png", ".jpg", ".jpeg")):
-        st.image(os.path.join("saved_charts", file), width=350)
-        txt_file = os.path.join("saved_charts", file + ".txt")
-        if os.path.exists(txt_file):
-            with open(txt_file, "r", encoding="utf-8") as f:
-                reason = f.read()
-            st.caption(f"📜 Reason: {reason}")
-
-# --- Multi-Timeframe Analysis ---
-for tf_label, tf_code in timeframes.items():
-    st.markdown("---")
-    st.subheader(f"🕒 Timeframe: {tf_label}")
-
-    df = get_data(symbol_yf, tf_code)
-    if df.empty:
-        st.warning("⚠️ No data found for this symbol or timeframe.")
-        continue
-
-    trend = detect_trend(df)
-    df = generate_signals(df)
-
-    if not df[df["Signal"] != 0].empty:
-        signal_index = df[df["Signal"] != 0].index[-1]
-        signal = df.loc[signal_index, "Signal"]
-        price = round(df.loc[signal_index, "Close"], 2)
+# --- Trend Detection ---
+def detect_trend(row):
+    if row['EMA20'] > row['EMA50']:
+        return "Uptrend"
+    elif row['EMA20'] < row['EMA50']:
+        return "Downtrend"
     else:
-        signal = 0
-        price = round(df["Close"].iloc[-1], 2)
+        return "Sideways"
 
-    sl, tp = generate_sl_tp(price, signal, trend)
-    reward = abs(tp - price)
-    risk = abs(price - sl)
-    rr_ratio = round(reward / risk, 2) if risk != 0 else "∞"
-    signal_text = "Buy" if signal == 1 else "Sell" if signal == -1 else "No Signal"
+df['Trend'] = df.apply(detect_trend, axis=1)
 
-    acc_ema = backtest_strategy_accuracy(df)
-    acc_epa = backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True)
-
-    st.write(f"**Trend:** `{trend}`")
-    st.write(f"**Signal:** `{signal_text}`")
-    st.metric("📘 Only EMA Accuracy", f"{acc_ema}%")
-    st.metric("🔮 Elliott + Price Action Accuracy", f"{acc_epa}%")
-    st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
-    st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
-
-    breakout, message = detect_elliott_wave_breakout(df)
-    if breakout:
-        st.warning(message)
-
-    patterns = detect_price_action(df)
-    row = {
-        "Bullish Engulfing": any("Bullish Engulfing" in p[1] for p in patterns),
-        "Bearish Engulfing": any("Bearish Engulfing" in p[1] for p in patterns),
-        "Elliott_Wave_Breakout": breakout,
-        "EMA_Trend": trend
-    }
-
-    conf_score, _ = strategy_confidence(row)
-    st.subheader("📊 Pro Strategy Confidence Meter")
-    if conf_score >= 3:
-        st.success(f"✅ **Strong Buy Signal!**\nConfidence Score: {conf_score}/5")
-    elif conf_score <= -3:
-        st.error(f"❌ **Strong Sell Signal!**\nConfidence Score: {conf_score}/5")
+# --- Signal Detection (Scalping) ---
+def scalping_signal(row):
+    if row['Trend'] == "Uptrend" and row['RSI'] < 70:
+        return "Buy"
+    elif row['Trend'] == "Downtrend" and row['RSI'] > 30:
+        return "Sell"
     else:
-        st.warning(f"⚠️ **Sideways / Neutral Market**\nConfidence Score: {conf_score}/5")
+        return None
 
-    acc_df = accuracy_over_days(df)
-    st.markdown("### 📈 Profit Probability Estimate")
-    st.info(f"📘 **EMA Strategy Profit Chance:** `{acc_ema}%` | Loss: `{100 - acc_ema}%`")
-    st.success(f"🔮 **Elliott + PA Strategy Profit Chance:** `{acc_epa}%` | Loss: `{100 - acc_epa}%`")
+df['Signal'] = df.apply(scalping_signal, axis=1)
+
+# --- Show latest signal ---
+latest_signal = df['Signal'].iloc[-1]
+latest_trend = df['Trend'].iloc[-1]
+current_price = df['Close'].iloc[-1]
+
+st.subheader(f"📊 {selected_asset} - {selected_tf} Analysis")
+st.write(f"**Current Price:** {current_price:.2f}")
+st.write(f"**Trend:** {latest_trend}")
+st.write(f"**Signal:** {latest_signal or 'No Signal'}")
+
+# --- Chart Plot ---
+fig = go.Figure()
+fig.add_trace(go.Candlestick(
+    x=df.index,
+    open=df['Open'],
+    high=df['High'],
+    low=df['Low'],
+    close=df['Close'],
+    name='Candles'
+))
+fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='blue', width=1), name='EMA20'))
+fig.add_trace(go.Scatter(x=df.index, y=df['EMA50'], line=dict(color='red', width=1), name='EMA50'))
+
+st.plotly_chart(fig, use_container_width=True)
