@@ -16,11 +16,35 @@ if not os.path.exists("saved_charts"):
 # --- Symbols ---
 symbols = {
     "Bitcoin (BTC)": "BTC-USD",
-    "Gold (XAU)": "GC=F",
+    "Gold (XAUUSD)": "XAUUSD=X",
     "NIFTY 50": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
     "Reliance": "RELIANCE.NS",
     "TCS": "TCS.NS",
-    "Infosys": "INFY.NS"
+    "Infosys": "INFY.NS",
+    "HDFC Bank": "HDFCBANK.NS",
+    "ICICI Bank": "ICICIBANK.NS",
+    "SBI": "SBIN.NS",
+    "Axis Bank": "AXISBANK.NS",
+    "Kotak Bank": "KOTAKBANK.NS",
+    "L&T": "LT.NS",
+    "ITC": "ITC.NS",
+    "HUL": "HINDUNILVR.NS",
+    "Airtel": "BHARTIARTL.NS",
+    "Maruti": "MARUTI.NS",
+    "Bajaj Finance": "BAJFINANCE.NS",
+    "HCL Tech": "HCLTECH.NS",
+    "Wipro": "WIPRO.NS",
+    "NTPC": "NTPC.NS",
+    "ONGC": "ONGC.NS",
+    "UltraTech": "ULTRACEMCO.NS",
+    "Titan": "TITAN.NS",
+    "Tata Motors": "TATAMOTORS.NS",
+    "TechM": "TECHM.NS",
+    "Adani Ports": "ADANIPORTS.NS",
+    "JSW Steel": "JSWSTEEL.NS",
+    "Power Grid": "POWERGRID.NS"
+}
 }
 symbol = st.selectbox("Select Asset", list(symbols.keys()))
 symbol_yf = symbols[symbol]
@@ -255,3 +279,4 @@ for tf_label, tf_code in timeframes.items():
     st.markdown("### 📈 Profit Probability Estimate")
     st.info(f"📘 **EMA Strategy Profit Chance:** `{acc_ema}%` | Loss: `{100 - acc_ema}%`")
     st.success(f"🔮 **Elliott + PA Strategy Profit Chance:** `{acc_epa}%` | Loss: `{100 - acc_epa}%`")
+
