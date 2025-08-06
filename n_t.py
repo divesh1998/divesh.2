@@ -19,34 +19,33 @@ symbols = {
     "Gold (XAUUSD)": "XAUUSD=X",
     "NIFTY 50": "^NSEI",
     "BANKNIFTY": "^NSEBANK",
-    "Reliance Industries": "RELIANCE.NS",
-    "Tata Consultancy Services": "TCS.NS",
+    "Reliance": "RELIANCE.NS",
+    "TCS": "TCS.NS",
     "Infosys": "INFY.NS",
     "HDFC Bank": "HDFCBANK.NS",
     "ICICI Bank": "ICICIBANK.NS",
-    "State Bank of India": "SBIN.NS",
+    "SBI": "SBIN.NS",
     "Axis Bank": "AXISBANK.NS",
-    "Kotak Mahindra Bank": "KOTAKBANK.NS",
-    "Larsen & Toubro": "LT.NS",
-    "ITC Ltd": "ITC.NS",
-    "Hindustan Unilever": "HINDUNILVR.NS",
-    "Bharti Airtel": "BHARTIARTL.NS",
-    "Maruti Suzuki": "MARUTI.NS",
+    "Kotak Bank": "KOTAKBANK.NS",
+    "L&T": "LT.NS",
+    "ITC": "ITC.NS",
+    "HUL": "HINDUNILVR.NS",
+    "Airtel": "BHARTIARTL.NS",
+    "Maruti": "MARUTI.NS",
     "Bajaj Finance": "BAJFINANCE.NS",
-    "HCL Technologies": "HCLTECH.NS",
+    "HCL Tech": "HCLTECH.NS",
     "Wipro": "WIPRO.NS",
     "NTPC": "NTPC.NS",
     "ONGC": "ONGC.NS",
-    "UltraTech Cement": "ULTRACEMCO.NS",
-    "Titan Company": "TITAN.NS",
+    "UltraTech": "ULTRACEMCO.NS",
+    "Titan": "TITAN.NS",
     "Tata Motors": "TATAMOTORS.NS",
-    "Tech Mahindra": "TECHM.NS",
+    "TechM": "TECHM.NS",
     "Adani Ports": "ADANIPORTS.NS",
     "JSW Steel": "JSWSTEEL.NS",
     "Power Grid": "POWERGRID.NS"
 }
 
-# --- Timeframes ---
 timeframes = {
     "1 Hour": "60m",
     "15 Minutes": "15m",
@@ -58,14 +57,16 @@ def get_data(symbol, interval):
     return yf.download(tickers=symbol, period="7d", interval=interval, progress=False)
 
 def detect_trend(df):
-    ema20 = df['Close'].ewm(span=20).mean()
-    ema50 = df['Close'].ewm(span=50).mean()
+    ema20 = df['Close'].ewm(span=20).mean().dropna()
+    ema50 = df['Close'].ewm(span=50).mean().dropna()
+    if len(ema20) == 0 or len(ema50) == 0:
+        return "Unknown"
     return "Uptrend" if ema20.iloc[-1] > ema50.iloc[-1] else "Downtrend"
 
 def detect_elliott_wave_breakout(df):
-    recent_close = df['Close'].iloc[-1]
-    prev_close = df['Close'].iloc[-10]
-    breakout = recent_close > prev_close * 1.02 or recent_close < prev_close * 0.98
+    recent = df['Close'].iloc[-1]
+    past = df['Close'].iloc[-10]
+    breakout = recent > past * 1.02 or recent < past * 0.98
     msg = "📈 Elliott Wave breakout detected!" if breakout else ""
     return breakout, msg
 
@@ -81,23 +82,12 @@ def detect_price_action(df):
 
 def strategy_confidence(row):
     score = 0
-    reasons = []
-    if row["Bullish Engulfing"]:
-        score += 1
-        reasons.append("Bullish Engulfing")
-    if row["Bearish Engulfing"]:
-        score -= 1
-        reasons.append("Bearish Engulfing")
-    if row["Elliott_Wave_Breakout"]:
-        score += 1
-        reasons.append("Elliott Wave Breakout")
-    if row["EMA_Trend"] == "Uptrend":
-        score += 1
-        reasons.append("EMA Uptrend")
-    elif row["EMA_Trend"] == "Downtrend":
-        score -= 1
-        reasons.append("EMA Downtrend")
-    return score, ", ".join(reasons)
+    if row["Bullish Engulfing"]: score += 1
+    if row["Bearish Engulfing"]: score -= 1
+    if row["Elliott_Wave_Breakout"]: score += 1
+    if row["EMA_Trend"] == "Uptrend": score += 1
+    elif row["EMA_Trend"] == "Downtrend": score -= 1
+    return score, f"Score: {score}"
 
 def generate_signals(df, use_elliott=False, use_price_action=False):
     df['EMA20'] = df['Close'].ewm(span=20).mean()
@@ -122,20 +112,16 @@ def generate_signals(df, use_elliott=False, use_price_action=False):
 
 def backtest_strategy_accuracy(df, use_elliott=False, use_price_action=False):
     df = generate_signals(df, use_elliott, use_price_action)
-    total_signals = df[df['Signal'] != 0]
+    total = df[df['Signal'] != 0]
     correct = df[df['StrategyReturn'] > 0]
-    accuracy = round(len(correct) / len(total_signals) * 100, 2) if len(total_signals) else 0
-    return accuracy
+    return round(len(correct) / len(total) * 100, 2) if len(total) else 0
 
 def accuracy_over_days(df):
-    df = df.copy()
-    df['Date'] = df.index.date
     df = generate_signals(df)
-    accuracy_df = df.groupby('Date').apply(
-        lambda x: (x['StrategyReturn'] > 0).sum() / (x['Signal'] != 0).sum() * 100
-        if (x['Signal'] != 0).sum() > 0 else 0
+    df['Date'] = df.index.date
+    return df.groupby('Date').apply(
+        lambda x: (x['StrategyReturn'] > 0).sum() / (x['Signal'] != 0).sum() * 100 if (x['Signal'] != 0).sum() > 0 else 0
     ).reset_index(name="Daily Accuracy")
-    return accuracy_df
 
 def generate_sl_tp(price, signal, trend):
     sl = price * 0.99 if signal == 1 else price * 1.01
@@ -176,6 +162,10 @@ for tf_label, tf_code in timeframes.items():
     st.subheader(f"🕒 Timeframe: {tf_label}")
 
     df = get_data(symbol_yf, tf_code)
+    if df.empty:
+        st.warning("⚠️ No data found for this symbol or timeframe.")
+        continue
+
     trend = detect_trend(df)
     df = generate_signals(df)
 
@@ -184,7 +174,6 @@ for tf_label, tf_code in timeframes.items():
         signal = df.loc[signal_index, "Signal"]
         price = round(df.loc[signal_index, "Close"], 2)
     else:
-        signal_index = df.index[-1]
         signal = 0
         price = round(df["Close"].iloc[-1], 2)
 
@@ -193,6 +182,7 @@ for tf_label, tf_code in timeframes.items():
     risk = abs(price - sl)
     rr_ratio = round(reward / risk, 2) if risk != 0 else "∞"
     signal_text = "Buy" if signal == 1 else "Sell" if signal == -1 else "No Signal"
+
     acc_ema = backtest_strategy_accuracy(df)
     acc_epa = backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True)
 
@@ -215,7 +205,7 @@ for tf_label, tf_code in timeframes.items():
         "EMA_Trend": trend
     }
 
-    conf_score, conf_reason = strategy_confidence(row)
+    conf_score, _ = strategy_confidence(row)
     st.subheader("📊 Pro Strategy Confidence Meter")
     if conf_score >= 3:
         st.success(f"✅ **Strong Buy Signal!**\nConfidence Score: {conf_score}/5")
