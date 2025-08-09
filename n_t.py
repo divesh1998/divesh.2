@@ -6,7 +6,7 @@ import os
 from PIL import Image
 
 st.set_page_config(page_title="📈 Divesh Market Zone", layout="wide")
-st.title("📈 Divesh Market Zone")
+st.title("📈 Divesh Market Zone - Pro Version")
 
 # Create save folder
 if not os.path.exists("saved_charts"):
@@ -44,12 +44,18 @@ symbols = {
     "Power Grid": "POWERGRID.NS",
     "NTPC Limited": "NTPC.NS"
 }
+
 symbol = st.selectbox("Select Asset", list(symbols.keys()))
 symbol_yf = symbols[symbol]
-timeframes = {"1H": "1h", "15M": "15m", "5M": "5m"}
+timeframes = {
+    "1H": "1h",
+    "15M": "15m",
+    "5M": "5m"
+}
+
 
 # --- Data Fetch ---
-def get_data(symbol, interval, period='7d'):
+def get_data(symbol, interval, period='30d'):
     df = yf.download(symbol, interval=interval, period=period)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -60,7 +66,7 @@ def get_data(symbol, interval, period='7d'):
 def detect_trend(df):
     return "Uptrend" if df["Close"].iloc[-1] > df["Close"].iloc[-2] else "Downtrend"
 
-# --- Price Action ---
+# --- Price Action Detection ---
 def detect_price_action(df):
     patterns = []
     for i in range(2, len(df)):
@@ -104,16 +110,24 @@ def detect_elliott_wave_breakout(df):
         return True, "🌀 Elliott Wave 3 Downtrend Breakout Detected!"
     return False, ""
 
-# --- Signal Generator ---
+# --- Signal Generator with RSI filter ---
 def generate_signals(df):
     df['EMA20'] = df['Close'].ewm(span=20).mean()
     df['EMA50'] = df['Close'].ewm(span=50).mean()
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
     df['Signal'] = 0
     trend = detect_trend(df)
-    if trend == "Uptrend":
-        df.loc[df['EMA20'] > df['EMA50'], 'Signal'] = 1
-    elif trend == "Downtrend":
-        df.loc[df['EMA20'] < df['EMA50'], 'Signal'] = -1
+    if trend == "Uptrend" and df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1] and df['RSI'].iloc[-1] > 50:
+        df['Signal'].iloc[-1] = 1
+    elif trend == "Downtrend" and df['EMA20'].iloc[-1] < df['EMA50'].iloc[-1] and df['RSI'].iloc[-1] < 50:
+        df['Signal'].iloc[-1] = -1
     return df
 
 # --- SL/TP ---
@@ -130,38 +144,25 @@ def generate_sl_tp(price, signal, trend):
         sl = tp = price
     return round(sl, 2), round(tp, 2)
 
-# --- Confidence Meter ---
-def strategy_confidence(row):
-    score = 0
-    reasons = []
-    if row.get("Bullish Engulfing"):
-        score += 1
-        reasons.append("📈 Price Action bullish")
-    if row.get("Bearish Engulfing"):
-        score -= 1
-        reasons.append("📉 Price Action bearish")
-    if row.get("Elliott_Wave_Breakout"):
-        score += 1
-        reasons.append("🔮 Elliott Wave breakout")
-    if row.get("EMA_Trend") == "Uptrend":
-        score += 1
-        reasons.append("✅ EMA Uptrend")
-    elif row.get("EMA_Trend") == "Downtrend":
-        score -= 1
-        reasons.append("❌ EMA Downtrend")
-    return score, ", ".join(reasons)
-
-# --- Strategy Accuracy ---
+# --- Backtest Strategy Accuracy ---
 def backtest_strategy_accuracy(df, use_elliott=False, use_price_action=False):
     df = df.copy()
     df['EMA20'] = df['Close'].ewm(span=20).mean()
     df['EMA50'] = df['Close'].ewm(span=50).mean()
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
     df['Signal'] = 0
-    trend = detect_trend(df)
-    if trend == "Uptrend":
-        df.loc[df['EMA20'] > df['EMA50'], 'Signal'] = 1
-    elif trend == "Downtrend":
-        df.loc[df['EMA20'] < df['EMA50'], 'Signal'] = -1
+    if df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1] and df['RSI'].iloc[-1] > 50:
+        df['Signal'].iloc[-1] = 1
+    elif df['EMA20'].iloc[-1] < df['EMA50'].iloc[-1] and df['RSI'].iloc[-1] < 50:
+        df['Signal'].iloc[-1] = -1
+
     if use_elliott:
         breakout, _ = detect_elliott_wave_breakout(df)
         if not breakout:
@@ -170,6 +171,7 @@ def backtest_strategy_accuracy(df, use_elliott=False, use_price_action=False):
         patterns = detect_price_action(df)
         if not patterns:
             df['Signal'] = 0
+
     df['Return'] = df['Close'].pct_change().shift(-1)
     df['StrategyReturn'] = df['Signal'].shift(1) * df['Return']
     total_signals = df[df['Signal'] != 0]
@@ -177,48 +179,7 @@ def backtest_strategy_accuracy(df, use_elliott=False, use_price_action=False):
     accuracy = round(len(correct) / len(total_signals) * 100, 2) if len(total_signals) else 0
     return accuracy
 
-# --- Accuracy Over Time ---
-def accuracy_over_days(df):
-    df = df.copy()
-    df['Date'] = df.index.date
-    df['EMA20'] = df['Close'].ewm(span=20).mean()
-    df['EMA50'] = df['Close'].ewm(span=50).mean()
-    df['Signal'] = 0
-    df.loc[df['EMA20'] > df['EMA50'], 'Signal'] = 1
-    df.loc[df['EMA20'] < df['EMA50'], 'Signal'] = -1
-    df['Return'] = df['Close'].pct_change().shift(-1)
-    df['StrategyReturn'] = df['Signal'].shift(1) * df['Return']
-    accuracy_df = df.groupby('Date').apply(
-        lambda x: (x['StrategyReturn'] > 0).sum() / (x['Signal'] != 0).sum() * 100
-        if (x['Signal'] != 0).sum() > 0 else 0
-    ).reset_index(name="Daily Accuracy")
-    return accuracy_df
-
-# --- Upload Chart ---
-uploaded_image = st.file_uploader("📸 Upload Chart", type=["png", "jpg", "jpeg"])
-trade_reason = st.text_area("📜 Enter Trade Reason")
-if st.button("💾 Save Chart & Reason"):
-    if uploaded_image is not None:
-        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_image.name}"
-        filepath = os.path.join("saved_charts", filename)
-        with open(filepath, "wb") as f:
-            f.write(uploaded_image.read())
-        with open(filepath + ".txt", "w", encoding="utf-8") as f:
-            f.write(trade_reason)
-        st.success("✅ Chart and Reason Saved!")
-
-# --- Show Saved Charts ---
-st.subheader("📁 Saved Charts")
-for file in os.listdir("saved_charts"):
-    if file.lower().endswith((".png", ".jpg", ".jpeg")):
-        st.image(os.path.join("saved_charts", file), width=350)
-        txt_file = os.path.join("saved_charts", file + ".txt")
-        if os.path.exists(txt_file):
-            with open(txt_file, "r", encoding="utf-8") as f:
-                reason = f.read()
-            st.caption(f"📜 Reason: {reason}")
-
-# --- Multi-Timeframe Analysis ---
+# --- Main Display ---
 for tf_label, tf_code in timeframes.items():
     st.markdown("---")
     st.subheader(f"🕒 Timeframe: {tf_label}")
@@ -227,60 +188,26 @@ for tf_label, tf_code in timeframes.items():
     trend = detect_trend(df)
     df = generate_signals(df)
 
-    # Find latest signal candle
-    if not df[df["Signal"] != 0].empty:
-        signal_index = df[df["Signal"] != 0].index[-1]
-        signal = df.loc[signal_index, "Signal"]
-        price = round(df.loc[signal_index, "Close"], 2)
-    else:
-        signal_index = df.index[-1]
-        signal = 0
-        price = round(df["Close"].iloc[-1], 2)
-
+    signal = int(df['Signal'].iloc[-1])
+    price = round(df['Close'].iloc[-1], 2)
     sl, tp = generate_sl_tp(price, signal, trend)
-    reward = abs(tp - price)
-    risk = abs(price - sl)
-    rr_ratio = round(reward / risk, 2) if risk != 0 else "∞"
+    rr_ratio = round(abs(tp - price) / abs(price - sl), 2) if price != sl else "∞"
+
     signal_text = "Buy" if signal == 1 else "Sell" if signal == -1 else "No Signal"
-    acc_ema = backtest_strategy_accuracy(df)
-    acc_epa = backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True)
+    acc_ema_rsi = backtest_strategy_accuracy(df)
+    acc_epa_rsi = backtest_strategy_accuracy(df, use_elliott=True, use_price_action=True)
 
     st.write(f"**Trend:** `{trend}`")
     st.write(f"**Signal:** `{signal_text}`")
-    st.metric("📘 Only EMA Accuracy", f"{acc_ema}%")
-    st.metric("🔮 Elliott + Price Action Accuracy", f"{acc_epa}%")
+    st.metric("📘 EMA+RSI Accuracy", f"{acc_ema_rsi}%")
+    st.metric("🔮 Elliott+PA+RSI Accuracy", f"{acc_epa_rsi}%")
     st.write(f"**Entry Price:** `{price}` | **SL:** `{sl}` | **TP:** `{tp}`")
     st.write(f"📊 **Risk/Reward Ratio:** `{rr_ratio}`")
 
-    # --- Breakout Alert ---
     breakout, message = detect_elliott_wave_breakout(df)
     if breakout:
         st.warning(message)
 
-    # --- Detect Patterns (hidden from UI) ---
-    patterns = detect_price_action(df)
-
-    # --- Strategy Score Calculation ---
-    row = {
-        "Bullish Engulfing": any("Bullish Engulfing" in p[1] for p in patterns),
-        "Bearish Engulfing": any("Bearish Engulfing" in p[1] for p in patterns),
-        "Elliott_Wave_Breakout": breakout,
-        "EMA_Trend": trend
-    }
-
-    conf_score, conf_reason = strategy_confidence(row)
-    st.subheader("📊 Pro Strategy Confidence Meter")
-    if conf_score >= 3:
-        st.success(f"✅ **Strong Buy Signal!**\nConfidence Score: {conf_score}/5")
-    elif conf_score <= -3:
-        st.error(f"❌ **Strong Sell Signal!**\nConfidence Score: {conf_score}/5")
-    else:
-        st.warning(f"⚠️ **Sideways / Neutral Market**\nConfidence Score: {conf_score}/5")
-
-    # --- Accuracy Over Time ---
-    acc_df = accuracy_over_days(df)
-    #st.line_chart(acc_df.set_index("Date"))
-
     st.markdown("### 📈 Profit Probability Estimate")
-    st.info(f"📘 **EMA Strategy Profit Chance:** `{acc_ema}%` | Loss: `{100 - acc_ema}%`")
-    st.success(f"🔮 **Elliott + PA Strategy Profit Chance:** `{acc_epa}%` | Loss: `{100 - acc_epa}%`")
+    st.info(f"📘 **EMA+RSI Strategy Profit Chance:** `{acc_ema_rsi}%` | Loss: `{100 - acc_ema_rsi}%`")
+    st.success(f"🔮 **Elliott+PA+RSI Strategy Profit Chance:** `{acc_epa_rsi}%` | Loss: `{100 - acc_epa_rsi}%`")
